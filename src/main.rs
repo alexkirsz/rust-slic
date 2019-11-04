@@ -1,44 +1,9 @@
-#[macro_use]
-extern crate lazy_static;
-
-use glam::{Mat3, Vec2, Vec3};
+use glam::{Vec2, Vec3};
 use image::{self, DynamicImage, GenericImageView, ImageBuffer};
+use palette::{Lab, Srgb};
+use std::collections::{HashMap, HashSet};
+use std::iter::FromIterator;
 use std::{env, process};
-
-lazy_static! {
-    static ref MAT: Mat3 =
-        Mat3::from_cols_array(&[0.618, 0.177, 0.205, 0.299, 0.587, 0.114, 0.0, 0.056, 0.944])
-            .transpose();
-}
-
-fn rgb_to_xyz(x: glam::Vec3) -> glam::Vec3 {
-    MAT.mul_vec3(x)
-}
-
-lazy_static! {
-    static ref XYZ_WHITE: Vec3 = rgb_to_xyz(Vec3::new(1.0, 1.0, 1.0));
-}
-
-fn xyz_to_lab(x: glam::Vec3) -> glam::Vec3 {
-    fn f(t: f32) -> f32 {
-        if t > 0.207 {
-            t.powi(3)
-        } else {
-            (116.0 * t - 16.0) / 903.3
-        }
-    }
-
-    let ratio = x / *XYZ_WHITE;
-    let l = if ratio.y() > 0.008856 {
-        116.0 * ratio.y().powf(1.0 / 3.0) - 16.0
-    } else {
-        903.3 * ratio.y()
-    };
-    let a = 500.0 * (f(ratio.x()) - f(ratio.y()));
-    let b = 200.0 * (f(ratio.y()) - f(ratio.z()));
-
-    Vec3::new(l, a, b)
-}
 
 fn norm(x: Vec3, coords: Vec2, ratio: f32) -> f32 {
     x.length() + ratio * coords.length()
@@ -48,6 +13,7 @@ fn norm(x: Vec3, coords: Vec2, ratio: f32) -> f32 {
 struct Labxy(Vec3, Vec2);
 
 fn sample(pixels: &Vec<Vec3>, width: u32, height: u32, s: u32, n: u32) -> Vec<Vec<Labxy>> {
+    assert!(n <= s);
     let x_steps = (width + 1) / s;
     let y_steps = (height + 1) / s;
     let mut clusters = Vec::with_capacity((x_steps * y_steps) as usize);
@@ -62,7 +28,7 @@ fn sample(pixels: &Vec<Vec3>, width: u32, height: u32, s: u32, n: u32) -> Vec<Ve
                     continue;
                 }
                 for y in (ny - n / 2)..=(ny + n / 2) {
-                    if y >= height || x == nx && y == ny {
+                    if y >= height {
                         continue;
                     }
                     let grad = (pixels[(y * width + x + 1) as usize]
@@ -157,16 +123,20 @@ fn l1_vec2(v: Vec2) -> f32 {
     v.x() + v.y()
 }
 
-fn slic(img: &DynamicImage, m: u32, s: u32, threshold: f32) -> Vec<Vec<Labxy>> {
+fn slic(img: &DynamicImage, m: u32, s: u32, threshold: f32, min_size: u32) -> Vec<Region> {
     let pixels = img.pixels().map(|(_x, _y, v)| {
-        Vec3::new(
+        Srgb::new(
             v[0] as f32 / 255.0,
             v[1] as f32 / 255.0,
             v[2] as f32 / 255.0,
         )
     });
 
-    let lab_pixels: Vec<Vec3> = pixels.map(rgb_to_xyz).map(xyz_to_lab).collect();
+    let lab_pixels: Vec<Vec3> = pixels
+        .into_iter()
+        .map(|p| Lab::from(p))
+        .map(|p| Vec3::from(p.into_components()))
+        .collect();
 
     let mut clusters = sample(&lab_pixels, img.width(), img.height(), s, 3);
     let mut centers = compute_centers(&clusters);
@@ -191,26 +161,199 @@ fn slic(img: &DynamicImage, m: u32, s: u32, threshold: f32) -> Vec<Vec<Labxy>> {
         clusters = next_clusters;
         centers = next_centers;
     }
-    return clusters;
+
+    let labels = clusters_to_labels(&clusters, img.width(), img.height());
+
+    let (connected_labels, labels_count) =
+        extract_connected_components(&labels, img.width(), img.height());
+
+    let regions = labels_to_regions(&connected_labels, labels_count, img.width(), img.height());
+
+    let regions_connex = enforce_connectivity(&regions, min_size);
+
+    regions_connex
 }
 
-fn visualize(img: &DynamicImage, clusters: &Vec<Vec<Labxy>>) -> image::RgbImage {
+fn clusters_to_labels(clusters: &Vec<Vec<Labxy>>, width: u32, height: u32) -> Vec<usize> {
+    let mut labels = vec![0usize; (width * height) as usize];
+
+    for (i, cluster) in (0usize..).zip(clusters.iter()) {
+        for pixel in cluster {
+            labels[(pixel.1.y() as u32 * width + pixel.1.x() as u32) as usize] = i;
+        }
+    }
+
+    labels
+}
+
+fn extract_connected_components(
+    labels: &Vec<usize>,
+    width: u32,
+    height: u32,
+) -> (Vec<usize>, usize) {
+    let mut visited = vec![false; labels.len()];
+    let mut labels_out = vec![0usize; labels.len()];
+    let mut labels_count = 0usize;
+    let mut queue: Vec<(u32, u32)> = vec![];
+
+    for sy in 0..height {
+        for sx in 0..width {
+            if visited[(sy * width + sx) as usize] {
+                continue;
+            }
+
+            queue.push((sx, sy));
+
+            while let Some((x, y)) = queue.pop() {
+                let idx = (y * width + x) as usize;
+                visited[idx] = true;
+                let value = labels[idx];
+                labels_out[idx] = labels_count;
+
+                let snx = if x > 0 { x - 1 } else { x };
+                let enx = if x < width - 1 { x + 1 } else { x };
+                let sny = if y > 0 { y - 1 } else { y };
+                let eny = if y < height - 1 { y + 1 } else { y };
+
+                for ny in sny..=eny {
+                    for nx in snx..=enx {
+                        let nidx = (ny * width + nx) as usize;
+                        if visited[nidx] {
+                            continue;
+                        }
+                        let nvalue = labels[nidx];
+                        if nvalue == value {
+                            queue.push((nx, ny));
+                        }
+                    }
+                }
+            }
+
+            labels_count += 1;
+        }
+    }
+
+    (labels_out, labels_count)
+}
+
+#[derive(Debug)]
+struct Region {
+    label: usize,
+    pixels: Vec<(u32, u32)>,
+    neighbors: HashSet<usize>,
+}
+
+fn labels_to_regions(labels: &Vec<usize>, n: usize, width: u32, height: u32) -> Vec<Region> {
+    let mut regions: Vec<Region> = (0..n)
+        .map(|i| Region {
+            label: i,
+            pixels: vec![],
+            neighbors: HashSet::new(),
+        })
+        .collect();
+
+    for y in 0..height {
+        for x in 0..width {
+            let idx = ((y * width) + x) as usize;
+            let label = labels[idx];
+            let region = &mut regions[label];
+            region.pixels.push((x, y));
+
+            let snx = if x > 0 { x - 1 } else { x };
+            let enx = if x < width - 1 { x + 1 } else { x };
+            let sny = if y > 0 { y - 1 } else { y };
+            let eny = if y < height - 1 { y + 1 } else { y };
+
+            for ny in sny..=eny {
+                for nx in snx..=enx {
+                    let nidx = (ny * width + nx) as usize;
+                    let nlabel = labels[nidx];
+                    if nlabel != label {
+                        region.neighbors.insert(nlabel);
+                    }
+                }
+            }
+        }
+    }
+
+    regions
+}
+
+fn enforce_connectivity(regions: &Vec<Region>, min_size: u32) -> Vec<Region> {
+    let min_size = min_size as usize;
+
+    let mut regions_out: HashMap<usize, Region> =
+        HashMap::from_iter(regions.iter().filter_map(|r| {
+            if r.pixels.len() > min_size {
+                Some((
+                    r.label,
+                    Region {
+                        label: r.label,
+                        pixels: r.pixels.clone(),
+                        neighbors: r.neighbors.clone(),
+                    },
+                ))
+            } else {
+                None
+            }
+        }));
+
+    let mut parent_labels: Vec<usize> = regions
+        .iter()
+        .map(|r| {
+            if r.pixels.len() > min_size {
+                r.label
+            } else {
+                let biggest_neighbor = r
+                    .neighbors
+                    .iter()
+                    .map(|nlabel| &regions[*nlabel])
+                    .max_by_key(|neighbor| neighbor.pixels.len())
+                    .unwrap();
+                biggest_neighbor.label
+            }
+        })
+        .collect();
+
+    for label in 0usize..parent_labels.len() {
+        let mut parent_label = parent_labels[label];
+        if label == parent_label {
+            continue;
+        }
+        while parent_label != parent_labels[parent_label] {
+            let next_parent_label = parent_labels[parent_label];
+            parent_labels[parent_label] = label;
+            parent_label = next_parent_label;
+        }
+        let region = &regions[label];
+        // FIXME: It's still possible to end up in a local maxima that doesn't
+        // respect the min_size predicate.
+        let parent_region = regions_out.get_mut(&parent_label).unwrap();
+        parent_region.pixels.extend(&region.pixels);
+        parent_region.neighbors.extend(&region.neighbors);
+    }
+
+    regions_out.into_iter().map(|(_, v)| v).collect()
+}
+
+fn visualize(img: &DynamicImage, regions: &Vec<Region>) -> image::RgbImage {
     let mut res = ImageBuffer::new(img.width(), img.height());
-    for cluster in clusters {
-        let sum = cluster
+    for region in regions {
+        let sum = region
+            .pixels
             .iter()
             .fold(Vec3::new(0.0, 0.0, 0.0), |state, pixel| {
-                let rgb = img.get_pixel(pixel.1.x() as u32, pixel.1.y() as u32);
+                let rgb = img.get_pixel(pixel.0 as u32, pixel.1 as u32);
                 state + Vec3::new(rgb[0] as f32, rgb[1] as f32, rgb[2] as f32)
             });
-        let avg = sum / (cluster.len() as f32);
+        let avg = sum / (region.pixels.len() as f32);
         let color = image::Rgb([
             avg.x().round() as u8,
             avg.y().round() as u8,
             avg.z().round() as u8,
         ]);
-        for pixel in cluster {
-            res.put_pixel(pixel.1.x() as u32, pixel.1.y() as u32, color);
+        for pixel in &region.pixels {
+            res.put_pixel(pixel.0, pixel.1, color);
         }
     }
     res
@@ -225,19 +368,8 @@ fn main() {
 
     let img = image::open(&args[1]).unwrap();
 
-    // let res = ImageBuffer::from_fn(img.width(), img.height(), |x, y| {
-    //     let p = lab_pixels[(y * img.width() + x) as usize];
-    //     // https://stackoverflow.com/a/19099064/969302
-    //     image::Rgb([
-    //         (p.x() / 100.0 * 255.0).round() as u8,
-    //         ((p.y() + 86.185) / 184.439 * 255.0).round() as u8,
-    //         ((p.z() + 107.863) / 202.345 * 255.0).round() as u8,
-    //     ])
-    // });
-    // res.save("lol.png").unwrap();
-
-    let clusters = slic(&img, 10, 40, 50.0);
-    let res = visualize(&img, &clusters);
+    let regions = slic(&img, 10, 20, 50.0, 10);
+    let res = visualize(&img, &regions);
 
     res.save("lol.png").unwrap();
 }
