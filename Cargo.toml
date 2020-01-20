@@ -9,3 +9,4 @@ image = "0.22.3"
 glam = "0.8.0"
 lazy_static = "1.4.0"
 palette = "0.4.1"
+structopt = { version = "0.3", default-features = false }
