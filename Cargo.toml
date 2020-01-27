@@ -4,9 +4,28 @@ version = "0.1.0"
 authors = ["Alexandre Kirszenberg <alexandre.kirszenberg@epita.fr>"]
 edition = "2018"
 
+[lib]
+crate-type = ["cdylib"]
+
 [dependencies]
-image = "0.22.3"
+image = { version = "0.22.4", default-features = false, features = [
+  "gif_codec",
+  "jpeg",
+  "ico",
+  "png_codec",
+  "pnm",
+  "tga",
+  "tiff",
+  "webp",
+  "bmp",
+  "hdr",
+  "dxt"
+] }
 glam = "0.8.0"
 lazy_static = "1.4.0"
 palette = "0.4.1"
 structopt = { version = "0.3", default-features = false }
+wasm-bindgen = "0.2.58"
+js-sys = "0.3.35"
+web-sys = { version = "0.3.35", features = ["console"] }
+console_error_panic_hook = "0.1.6"
