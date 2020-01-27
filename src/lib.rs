@@ -5,7 +5,7 @@ use wasm_bindgen::prelude::*;
 mod lbp;
 mod slic;
 
-use slic::{visualize, SLIC};
+use slic::{visualize, Connexity, SLIC};
 
 #[wasm_bindgen]
 pub struct WasmSLIC {
@@ -34,10 +34,16 @@ impl WasmSLIC {
         texture_coef: f32,
         err_threshold: f32,
         min_size: u32,
+        c8: bool,
     ) -> Result<Vec<u8>, JsValue> {
-        let regions = self
-            .slic
-            .process(m, s, texture_coef, err_threshold, min_size);
+        let regions = self.slic.process(
+            m,
+            s,
+            texture_coef,
+            err_threshold,
+            min_size,
+            if c8 { Connexity::C8 } else { Connexity::C4 },
+        );
         let res = visualize(&self.img, &regions);
 
         let mut out = Vec::new();

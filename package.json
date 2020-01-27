@@ -6,10 +6,20 @@
   },
   "devDependencies": {
     "@wasm-tool/wasm-pack-plugin": "0.4.2",
-    "text-encoding": "^0.7.0",
     "html-webpack-plugin": "^3.2.0",
+    "text-encoding": "^0.7.0",
     "webpack": "^4.29.4",
     "webpack-cli": "^3.1.1",
     "webpack-dev-server": "^3.1.0"
+  },
+  "dependencies": {
+    "@babel/core": "^7.8.3",
+    "@babel/polyfill": "^7.8.3",
+    "@babel/preset-env": "^7.8.3",
+    "@babel/preset-react": "^7.8.3",
+    "@material-ui/core": "^4.9.0",
+    "babel-loader": "^8.0.6",
+    "react": "^16.12.0",
+    "react-dom": "^16.12.0"
   }
 }

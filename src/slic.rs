@@ -77,38 +77,63 @@ struct Coord(u32, u32);
 fn merge_regions(regions: &Vec<Region>, parents: Vec<usize>) -> Vec<Region> {
     let is_root = |region| parents[region] == region;
 
-    let mut regions_out: HashMap<usize, Region> = HashMap::from_iter(regions.iter().filter_map(|region| {
-        if !is_root(region.label) {
-            None
-        } else {
-            Some((
-                region.label,
-                Region {
-                    label: region.label,
-                    pixels: region.pixels.clone(),
-                    /* only take in account root regions */
-                    neighbors: region.neighbors.iter().map(|e| *e).filter(|&e| is_root(e)).collect(),
-                },
-            ))
-        }
-    }));
+    let mut regions_out: HashMap<usize, Region> =
+        HashMap::from_iter(regions.iter().filter_map(|region| {
+            if !is_root(region.label) {
+                None
+            } else {
+                Some((
+                    region.label,
+                    Region {
+                        label: region.label,
+                        pixels: region.pixels.clone(),
+                        /* only take in account root regions */
+                        neighbors: region
+                            .neighbors
+                            .iter()
+                            .map(|e| *e)
+                            .filter(|&e| is_root(e))
+                            .collect(),
+                    },
+                ))
+            }
+        }));
 
     for orphan_region in regions.iter().filter(|region| !is_root(region.label)) {
         let parent_label = parents[orphan_region.label];
         {
             let parent = regions_out.get_mut(&parent_label).unwrap();
             parent.pixels.extend(&orphan_region.pixels);
-            for neighbor in orphan_region.neighbors.iter().copied().filter(|&e| is_root(e)) {
+            for neighbor in orphan_region
+                .neighbors
+                .iter()
+                .copied()
+                .filter(|&e| is_root(e))
+            {
                 parent.neighbors.insert(neighbor);
             }
         }
 
-        for neighbor in orphan_region.neighbors.iter().copied().filter(|&e| is_root(e)) {
-            regions_out.get_mut(&neighbor).unwrap().neighbors.insert(parent_label);
+        for neighbor in orphan_region
+            .neighbors
+            .iter()
+            .copied()
+            .filter(|&e| is_root(e))
+        {
+            regions_out
+                .get_mut(&neighbor)
+                .unwrap()
+                .neighbors
+                .insert(parent_label);
         }
     }
 
     regions_out.into_iter().map(|(_, v)| v).collect()
+}
+
+pub enum Connexity {
+    C8,
+    C4,
 }
 
 impl SLIC {
@@ -279,6 +304,7 @@ impl SLIC {
         texture_coef: f32,
         err_threshold: f32,
         min_size: u32,
+        connexity: Connexity,
     ) -> Vec<Region> {
         let mut clusters = self.sample_initial_centers(3, s);
         println!("initials clusters: {}", clusters.len());
@@ -300,7 +326,8 @@ impl SLIC {
 
         let labels = self.clusters_to_labels(&clusters);
 
-        let (connected_labels, labels_count) = self.extract_connected_components(&labels);
+        let (connected_labels, labels_count) =
+            self.extract_connected_components(&labels, connexity);
 
         let regions = self.labels_to_regions(&connected_labels, labels_count);
 
@@ -320,7 +347,11 @@ impl SLIC {
         labels
     }
 
-    fn extract_connected_components(&self, labels: &Vec<usize>) -> (Vec<usize>, usize) {
+    fn extract_connected_components(
+        &self,
+        labels: &Vec<usize>,
+        connexity: Connexity,
+    ) -> (Vec<usize>, usize) {
         let mut visited = vec![false; labels.len()];
         let mut labels_out = vec![0usize; labels.len()];
         let mut labels_count = 0usize;
@@ -340,21 +371,39 @@ impl SLIC {
                     let value = labels[idx];
                     labels_out[idx] = labels_count;
 
-                    let snx = if x > 0 { x - 1 } else { x };
-                    let enx = if x < self.width - 1 { x + 1 } else { x };
-                    let sny = if y > 0 { y - 1 } else { y };
-                    let eny = if y < self.height - 1 { y + 1 } else { y };
+                    let neighbors: Vec<_> = (match connexity {
+                        Connexity::C8 => vec![
+                            (-1, -1),
+                            (-1, 0),
+                            (-1, 1),
+                            (0, -1),
+                            (0, 1),
+                            (1, -1),
+                            (1, 0),
+                            (1, 1),
+                        ],
+                        Connexity::C4 => vec![(-1, 0), (0, -1), (0, 1), (1, 0)],
+                    })
+                    .into_iter()
+                    .filter_map(|(dnx, dny)| {
+                        let nx = x as i64 + dnx;
+                        let ny = y as i64 + dny;
+                        if nx < 0 || ny < 0 || nx >= self.width as i64 || ny >= self.height as i64 {
+                            None
+                        } else {
+                            Some((nx as u32, ny as u32))
+                        }
+                    })
+                    .collect();
 
-                    for ny in sny..=eny {
-                        for nx in snx..=enx {
-                            let nidx = (ny * self.width + nx) as usize;
-                            if visited[nidx] {
-                                continue;
-                            }
-                            let nvalue = labels[nidx];
-                            if nvalue == value {
-                                queue.push((nx, ny));
-                            }
+                    for (nx, ny) in neighbors {
+                        let nidx = (ny * self.width + nx) as usize;
+                        if visited[nidx] {
+                            continue;
+                        }
+                        let nvalue = labels[nidx];
+                        if nvalue == value {
+                            queue.push((nx, ny));
                         }
                     }
                 }
@@ -411,7 +460,10 @@ impl SLIC {
          */
 
         let min_size = min_size as usize;
-        let is_root_map: Vec<bool> = regions.iter().map(|region| region.pixels.len() >= min_size).collect();
+        let is_root_map: Vec<bool> = regions
+            .iter()
+            .map(|region| region.pixels.len() >= min_size)
+            .collect();
 
         /* first, partition the regions */
         let (root_regions, orphan_regions): (Vec<&Region>, Vec<&Region>) =

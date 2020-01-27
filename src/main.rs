@@ -5,7 +5,7 @@ use structopt::StructOpt;
 mod lbp;
 mod slic;
 
-use slic::{visualize, SLIC};
+use slic::{visualize, Connexity, SLIC};
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "tslic", about = "A Texture Sensitive SLIC implementation.")]
@@ -25,6 +25,9 @@ struct Opt {
     #[structopt(short = "t", default_value = "10")]
     texture: f32,
 
+    #[structopt(long = "c8")]
+    c8: bool,
+
     #[structopt(parse(from_os_str))]
     input: PathBuf,
 
@@ -40,7 +43,14 @@ fn main() {
     let img = image::open(opt.input).unwrap();
 
     let slic = SLIC::new(&img);
-    let regions = slic.process(opt.m, opt.m, opt.texture, opt.error_threshold, opt.min_size);
+    let regions = slic.process(
+        opt.m,
+        opt.m,
+        opt.texture,
+        opt.error_threshold,
+        opt.min_size,
+        if opt.c8 { Connexity::C8 } else { Connexity::C4 },
+    );
     let res = visualize(&img, &regions);
 
     res.save(opt.output).unwrap();
