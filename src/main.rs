@@ -19,7 +19,7 @@ struct Opt {
     #[structopt(short = "e", long = "error-threshold", default_value = "50")]
     error_threshold: f32,
 
-    #[structopt(short = "s", default_value = "10")]
+    #[structopt(short = "S", default_value = "10")]
     min_size: u32,
 
     #[structopt(short = "t", default_value = "10")]
@@ -40,7 +40,7 @@ fn main() {
     let img = image::open(opt.input).unwrap();
 
     let slic = SLIC::new(&img);
-    let regions = slic.process(10, 20, opt.texture, 50.0, 10);
+    let regions = slic.process(opt.m, opt.m, opt.texture, opt.error_threshold, opt.min_size);
     let res = visualize(&img, &regions);
 
     res.save(opt.output).unwrap();
