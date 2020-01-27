@@ -31,8 +31,8 @@ async function setup() {
     const arrayBufferReader = new FileReader();
     arrayBufferReader.addEventListener("load", e => {
       const bytes = new Uint8Array(arrayBufferReader.result);
-      const slic = rust.WasmSLIC.new(bytes, 10, 20, 5.0);
-      const res = slic.process(50.0, 10);
+      const slic = rust.WasmSLIC.new(bytes);
+      const res = slic.process(10, 20, 5.0, 50.0, 10);
       const base64Data = btoa(String.fromCharCode.apply(null, res));
       imgRes.src = "data:image/png;base64," + base64Data;
     });
