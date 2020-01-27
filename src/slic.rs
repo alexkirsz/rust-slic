@@ -74,6 +74,43 @@ pub struct SLIC {
 #[derive(Debug, Copy, Clone)]
 struct Coord(u32, u32);
 
+fn merge_regions(regions: &Vec<Region>, parents: Vec<usize>) -> Vec<Region> {
+    let is_root = |region| parents[region] == region;
+
+    let mut regions_out: HashMap<usize, Region> = HashMap::from_iter(regions.iter().filter_map(|region| {
+        if !is_root(region.label) {
+            None
+        } else {
+            Some((
+                region.label,
+                Region {
+                    label: region.label,
+                    pixels: region.pixels.clone(),
+                    /* only take in account root regions */
+                    neighbors: region.neighbors.iter().map(|e| *e).filter(|&e| is_root(e)).collect(),
+                },
+            ))
+        }
+    }));
+
+    for orphan_region in regions.iter().filter(|region| !is_root(region.label)) {
+        let parent_label = parents[orphan_region.label];
+        {
+            let parent = regions_out.get_mut(&parent_label).unwrap();
+            parent.pixels.extend(&orphan_region.pixels);
+            for neighbor in orphan_region.neighbors.iter().copied().filter(|&e| is_root(e)) {
+                parent.neighbors.insert(neighbor);
+            }
+        }
+
+        for neighbor in orphan_region.neighbors.iter().copied().filter(|&e| is_root(e)) {
+            regions_out.get_mut(&neighbor).unwrap().neighbors.insert(parent_label);
+        }
+    }
+
+    regions_out.into_iter().map(|(_, v)| v).collect()
+}
+
 impl SLIC {
     fn sample(&self, coord: Coord) -> PointMeta {
         let x = coord.0;
@@ -374,11 +411,11 @@ impl SLIC {
          */
 
         let min_size = min_size as usize;
+        let is_root_map: Vec<bool> = regions.iter().map(|region| region.pixels.len() >= min_size).collect();
 
         /* first, partition the regions */
-        let (root_regions, orphean_regions): (Vec<&Region>, Vec<&Region>) = regions
-            .iter()
-            .partition(|region| region.pixels.len() >= min_size);
+        let (root_regions, orphan_regions): (Vec<&Region>, Vec<&Region>) =
+            regions.iter().partition(|region| is_root_map[region.label]);
 
         /* this map will store the chosen parent for each region */
         let mut region_parents: Vec<Option<usize>> = vec![None; regions.len()];
@@ -393,7 +430,7 @@ impl SLIC {
                            region_parents: &mut Vec<Option<usize>>,
                            parent: usize,
                            item: usize| {
-            if !queued[item] && region_parents[item].is_none() {
+            if !is_root_map[item] && !queued[item] && region_parents[item].is_none() {
                 queued[item] = true;
                 queue.push_back((parent, item));
             }
@@ -421,12 +458,12 @@ impl SLIC {
             }
         }
 
-        while let Some((parent_id, orphean_id)) = pop_region(&mut queued, &mut queue) {
+        while let Some((parent_id, orphan_id)) = pop_region(&mut queued, &mut queue) {
             /* set the parent relationship */
-            region_parents[orphean_id] = Some(parent_id);
+            region_parents[orphan_id] = Some(parent_id);
 
             /* each neighbor has the same parent */
-            for neighbor in &regions[orphean_id].neighbors {
+            for neighbor in &regions[orphan_id].neighbors {
                 push_region(
                     &mut queued,
                     &mut queue,
@@ -437,26 +474,8 @@ impl SLIC {
             }
         }
 
-        let mut regions_out: HashMap<usize, Region> =
-            HashMap::from_iter(root_regions.iter().filter_map(|region| {
-                Some((
-                    region.label,
-                    Region {
-                        label: region.label,
-                        pixels: region.pixels.clone(),
-                        neighbors: region.neighbors.clone(),
-                    },
-                ))
-            }));
-
-        for orphean_region in orphean_regions {
-            let parent_label = region_parents[orphean_region.label].unwrap();
-            let parent = regions_out.get_mut(&parent_label).unwrap();
-            parent.pixels.extend(&orphean_region.pixels);
-            parent.neighbors.extend(&orphean_region.neighbors);
-        }
-
-        regions_out.into_iter().map(|(_, v)| v).collect()
+        let unwrapped_parents = region_parents.iter().map(|&e| e.unwrap()).collect();
+        merge_regions(&regions, unwrapped_parents)
     }
 } // impl SLIC
 
