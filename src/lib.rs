@@ -16,10 +16,10 @@ pub struct WasmSLIC {
 #[wasm_bindgen]
 impl WasmSLIC {
     #[wasm_bindgen]
-    pub fn new(img: &[u8], m: u32, s: u32, texture_coef: f32) -> Result<WasmSLIC, JsValue> {
+    pub fn new(img: &[u8]) -> Result<WasmSLIC, JsValue> {
         match image::load_from_memory(img) {
             Ok(img) => {
-                let slic = SLIC::new(&img, m, s, texture_coef);
+                let slic = SLIC::new(&img);
                 Ok(WasmSLIC { img, slic })
             }
             Err(e) => Err(js_sys::Error::new(&e.to_string()).into()),
@@ -27,8 +27,17 @@ impl WasmSLIC {
     }
 
     #[wasm_bindgen]
-    pub fn process(&self, err_threshold: f32, min_size: u32) -> Result<Vec<u8>, JsValue> {
-        let regions = self.slic.process(err_threshold, min_size);
+    pub fn process(
+        &self,
+        m: u32,
+        s: u32,
+        texture_coef: f32,
+        err_threshold: f32,
+        min_size: u32,
+    ) -> Result<Vec<u8>, JsValue> {
+        let regions = self
+            .slic
+            .process(m, s, texture_coef, err_threshold, min_size);
         let res = visualize(&self.img, &regions);
 
         let mut out = Vec::new();

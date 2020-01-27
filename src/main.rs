@@ -39,8 +39,8 @@ fn main() {
 
     let img = image::open(opt.input).unwrap();
 
-    let slic = SLIC::new(&img, 10, 20, opt.texture);
-    let regions = slic.process(50.0, 10);
+    let slic = SLIC::new(&img);
+    let regions = slic.process(10, 20, opt.texture, 50.0, 10);
     let res = visualize(&img, &regions);
 
     res.save(opt.output).unwrap();

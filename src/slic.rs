@@ -69,9 +69,6 @@ pub struct SLIC {
     lbp: Vec<u8>,
     width: u32,
     height: u32,
-    m: u32,
-    s: u32,
-    texture_coef: f32,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -90,15 +87,15 @@ impl SLIC {
     }
 
     /* pick initial clusters at least gradient coordinates */
-    fn sample_initial_centers(&self, n: u32) -> Vec<Vec<Coord>> {
-        assert!(n <= self.s);
-        let x_steps = (self.width + 1) / self.s;
-        let y_steps = (self.height + 1) / self.s;
+    fn sample_initial_centers(&self, n: u32, s: u32) -> Vec<Vec<Coord>> {
+        assert!(n <= s);
+        let x_steps = (self.width + 1) / s;
+        let y_steps = (self.height + 1) / s;
         let mut clusters = Vec::with_capacity((x_steps * y_steps) as usize);
         for xx in 0..x_steps {
-            let nx = xx * self.s + self.s / 2;
+            let nx = xx * s + s / 2;
             for yy in 0..y_steps {
-                let ny = yy * self.s + self.s / 2;
+                let ny = yy * s + s / 2;
                 let mut smallest_grad = std::f32::INFINITY;
                 let mut smallest_pos: Option<Coord> = None;
                 for x in (nx - n / 2)..=(nx + n / 2) {
@@ -167,26 +164,33 @@ impl SLIC {
             .collect()
     }
 
-    fn iterate(&self, clusters: &Vec<Vec<Coord>>, centers: &Vec<PointMeta>) -> Vec<Vec<Coord>> {
+    fn iterate(
+        &self,
+        clusters: &Vec<Vec<Coord>>,
+        centers: &Vec<PointMeta>,
+        m: u32,
+        s: u32,
+        texture_coef: f32,
+    ) -> Vec<Vec<Coord>> {
         let mut result: Vec<(f32, Option<u32>)> =
             vec![(std::f32::INFINITY, None); self.lab_pixels.len()];
 
-        let ratio = (self.m as f32) / (self.s as f32);
+        let ratio = (m as f32) / (s as f32);
         for (i, center) in (0u32..).zip(centers.into_iter()) {
             let center_pos = center.coordinates;
             let (cx, cy) = (center_pos.x().round() as i64, center_pos.y().round() as i64);
-            for y in (cy - self.s as i64)..(cy + self.s as i64) {
+            for y in (cy - s as i64)..(cy + s as i64) {
                 if y < 0 || y >= self.height as i64 {
                     continue;
                 }
-                for x in (cx - self.s as i64)..(cx + self.s as i64) {
+                for x in (cx - s as i64)..(cx + s as i64) {
                     if x < 0 || x >= self.width as i64 {
                         continue;
                     }
 
                     let index = y as usize * self.width as usize + x as usize;
                     let dist = (self.sample(Coord(x as u32, y as u32)) - *center)
-                        .norm(ratio, self.texture_coef);
+                        .norm(ratio, texture_coef);
                     if dist < result[index].0 {
                         result[index] = (dist, Some(i));
                     }
@@ -208,7 +212,7 @@ impl SLIC {
         next_clusters
     }
 
-    pub fn new(img: &DynamicImage, m: u32, s: u32, texture_coef: f32) -> SLIC {
+    pub fn new(img: &DynamicImage) -> SLIC {
         let pixels = img.pixels().map(|(_x, _y, v)| {
             Srgb::new(
                 v[0] as f32 / 255.0,
@@ -228,26 +232,30 @@ impl SLIC {
             lbp: lbp(img),
             width: img.width(),
             height: img.height(),
-            m: m,
-            s: s,
-            texture_coef: texture_coef,
         }
     }
 
-    pub fn process(&self, err_threshold: f32, min_size: u32) -> Vec<Region> {
-        let mut clusters = self.sample_initial_centers(3);
+    pub fn process(
+        &self,
+        m: u32,
+        s: u32,
+        texture_coef: f32,
+        err_threshold: f32,
+        min_size: u32,
+    ) -> Vec<Region> {
+        let mut clusters = self.sample_initial_centers(3, s);
         println!("initials clusters: {}", clusters.len());
         let mut centers = self.compute_centers(&clusters);
         let mut err = std::f32::INFINITY;
         while err > err_threshold {
             println!("error: {}", err);
-            let next_clusters = self.iterate(&clusters, &centers);
+            let next_clusters = self.iterate(&clusters, &centers, m, s, texture_coef);
             let next_centers = self.compute_centers(&next_clusters);
             err = centers
                 .iter()
                 .zip(next_centers.iter())
                 .fold(0.0, |state, (c1, c2)| {
-                    state + (*c1 - *c2).l1_norm(self.texture_coef)
+                    state + (*c1 - *c2).l1_norm(texture_coef)
                 });
             clusters = next_clusters;
             centers = next_centers;
